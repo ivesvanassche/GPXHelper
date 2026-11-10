@@ -1,0 +1,978 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Langs de route – OSM-data zoeken rond een GPX</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --paper:#EEF2EF; --surface:#FFFFFF; --ink:#1E2A2B; --muted:#5F6E6C; --line:#C9D3CF;
+  --route:#D81B7A; --route-soft:#F7D3E5; --focus:#2F7BB8; --danger:#B3261E;
+  --sans:"Barlow",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --cond:"Barlow Condensed","Arial Narrow",system-ui,sans-serif;
+  box-sizing:border-box;
+  padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px);
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --paper:#141B1C; --surface:#1C2526; --ink:#E5ECEA; --muted:#97A6A3; --line:#33403F;
+    --route:#FF4FA3; --route-soft:#4A1F35; --focus:#6FB2E8; --danger:#FF8A80; color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#141B1C; --surface:#1C2526; --ink:#E5ECEA; --muted:#97A6A3; --line:#33403F;
+  --route:#FF4FA3; --route-soft:#4A1F35; --focus:#6FB2E8; --danger:#FF8A80; color-scheme:dark;
+}
+*,*::before,*::after{box-sizing:inherit}
+[hidden]{display:none!important}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.5 var(--sans)}
+a{color:var(--focus)}
+:focus-visible{outline:3px solid var(--focus);outline-offset:2px}
+
+.app{display:grid;grid-template-columns:minmax(300px,380px) 1fr;min-height:100vh}
+aside{background:var(--surface);border-right:1px solid var(--line);padding:28px 24px 40px;display:flex;flex-direction:column;gap:28px}
+main{display:flex;flex-direction:column;min-width:0}
+
+header h1{font:700 2.6rem/0.95 var(--cond);margin:0;letter-spacing:-0.01em}
+header h1 span{display:block;width:72px;height:6px;border-radius:3px;background:var(--route);margin-top:12px}
+header p{color:var(--muted);margin:12px 0 0;max-width:34ch}
+
+.step h2{font:600 1.25rem/1.2 var(--cond);margin:0 0 10px;display:flex;gap:10px;align-items:baseline}
+.step h2 b{font:700 1rem/1 var(--cond);color:var(--surface);background:var(--ink);border-radius:50%;width:24px;height:24px;display:inline-grid;place-items:center;flex:none}
+
+.drop{display:block;position:relative;border:2px dashed var(--line);border-radius:10px;padding:18px;text-align:center;cursor:pointer;transition:border-color .15s,background .15s}
+.drop:hover,.drop.over{border-color:var(--route);background:var(--route-soft)}
+.drop input{position:absolute;opacity:0;width:1px;height:1px}
+.drop strong{display:block}
+.drop small{color:var(--muted)}
+.trackinfo{margin-top:10px;font-size:.95rem;color:var(--muted)}
+.trackinfo b{color:var(--ink)}
+.linkbtn{background:none;border:0;padding:0;color:var(--focus);font:inherit;cursor:pointer;text-decoration:underline}
+
+.cats{display:grid;gap:6px}
+.cats label{display:flex;gap:10px;align-items:center;cursor:pointer;padding:3px 0}
+.cats input{width:18px;height:18px;accent-color:var(--ink)}
+.swatch{width:12px;height:12px;border-radius:50%;flex:none;border:2px solid var(--surface);box-shadow:0 0 0 1px var(--line)}
+
+.field{display:grid;gap:4px;margin-top:14px}
+.field label{font-weight:600;font-size:.95rem}
+.field small{color:var(--muted);font-size:.85rem}
+input[type=number],select,textarea{font:inherit;color:var(--ink);background:var(--paper);border:1px solid var(--line);border-radius:6px;padding:8px 10px;width:100%}
+textarea{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:.82rem;line-height:1.4;resize:vertical}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+
+.actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+button.primary,button.secondary{font:600 1rem/1 var(--sans);border-radius:8px;padding:12px 16px;cursor:pointer;border:1px solid var(--ink)}
+button.primary{background:var(--route);border-color:var(--route);color:#fff}
+button.primary:disabled,button.secondary:disabled{opacity:.4;cursor:not-allowed}
+button.secondary{background:transparent;color:var(--ink)}
+.status{min-height:1.5em;margin-top:10px;font-size:.95rem}
+.status.err{color:var(--danger)}
+.meta{color:var(--muted);font-size:.85rem;margin-top:6px}
+
+#map{flex:1 1 auto;min-height:55vh;background:var(--paper)}
+.leaflet-popup-content-wrapper,.leaflet-popup-tip{background:var(--surface);color:var(--ink)}
+.leaflet-popup-content{font:15px/1.4 var(--sans);margin:12px 14px}
+.leaflet-popup-content h3{font:600 1.1rem/1.2 var(--cond);margin:0 0 4px}
+
+.results{padding:24px clamp(16px,3vw,32px) 48px;border-top:1px solid var(--line)}
+.results h2{font:600 1.5rem/1.1 var(--cond);margin:0}
+.reshead{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;margin-bottom:18px}
+.empty{color:var(--muted);max-width:60ch}
+
+/* Strook-kaart: de route als rechte lijn, POI's op hun kilometer */
+.strip{position:relative;margin:4px 0 24px;overflow-x:auto}
+.strip-inner{min-width:560px}
+.lane{display:grid;grid-template-columns:170px 1fr;align-items:center;height:22px}
+.lane .toggle{font:inherit;font-size:.85rem;color:var(--ink);background:none;border:0;padding:0 8px 0 0;text-align:left;cursor:pointer;display:flex;gap:6px;align-items:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lane .toggle[aria-pressed="false"]{color:var(--muted);text-decoration:line-through}
+.lane .toggle[aria-pressed="false"] .swatch{opacity:.3}
+.filterhint{font-size:.85rem;color:var(--muted);margin:0 0 6px}
+.lane .track{position:relative;height:100%;border-left:1px solid var(--line);border-right:1px solid var(--line)}
+.lane .track::before{content:"";position:absolute;left:0;right:0;top:50%;border-top:1px dotted var(--line)}
+.dot{position:absolute;top:50%;width:11px;height:11px;margin:-5.5px 0 0 -5.5px;border-radius:50%;border:2px solid var(--surface);padding:0;cursor:pointer}
+.dot:hover{transform:scale(1.4)}
+.ruler{display:grid;grid-template-columns:170px 1fr;margin-top:4px}
+.ruler .bar{position:relative;height:28px}
+.ruler .bar::before{content:"";position:absolute;left:0;right:0;top:0;height:5px;border-radius:3px;background:var(--route)}
+.ruler .tick{position:absolute;top:8px;font-size:.8rem;color:var(--muted);transform:translateX(-50%)}
+
+.tablewrap{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:.95rem}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font:600 .95rem var(--cond);color:var(--muted)}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+tbody tr{cursor:pointer}
+tbody tr:hover{background:var(--route-soft)}
+td .kind{display:inline-flex;gap:6px;align-items:center}
+
+button.small{padding:6px 12px;font-size:.9rem}
+.stage-pin{background:var(--ink);color:var(--surface);border:2px solid #fff;border-radius:50%;display:grid;place-items:center;font:700 14px/1 var(--cond);box-shadow:0 1px 3px rgba(0,0,0,.35)}
+.tools{display:flex;flex-wrap:wrap;gap:6px 12px;align-items:center;margin-top:6px}
+.tools select{width:auto;max-width:100%;padding:4px 8px;font-size:.85rem}
+.segcell{min-width:150px}
+.segend{display:block;font-size:.85rem;color:var(--muted);margin-top:4px}
+.popsegs{margin-top:8px;padding-top:8px;border-top:1px solid var(--line)}
+.popsegs label{display:block;margin-bottom:4px}
+.segpick{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.segpick select{width:auto;max-width:260px;padding:4px 8px;font-size:.85rem}
+td .sub{display:block;color:var(--muted);font-size:.85rem}
+td .note{display:block;color:var(--danger);font-size:.85rem;margin-top:2px}
+input[type=number]{appearance:textfield}
+@media (max-width:820px){
+  .app{grid-template-columns:1fr}
+  aside{border-right:0;border-bottom:1px solid var(--line)}
+  #map{min-height:60vh}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div class="app">
+<aside>
+  <header>
+    <h1>Langs de route<span></span></h1>
+    <p>Laad een GPX-bestand en zoek in OpenStreetMap wat er binnen loop- of fietsafstand van je route ligt.</p>
+  </header>
+
+  <section class="step">
+    <h2><b>1</b>Route laden</h2>
+    <label class="drop" id="drop">
+      <input type="file" id="file" accept=".gpx,application/gpx+xml,application/xml,text/xml">
+      <strong>Kies een GPX-bestand</strong>
+      <small>of sleep het hierheen</small>
+    </label>
+    <div class="trackinfo" id="trackinfo">Nog geen route? <button class="linkbtn" id="demo" type="button">Gebruik een voorbeeldroute</button>.</div>
+  </section>
+
+  <section class="step">
+    <h2><b>2</b>Wat zoek je?</h2>
+    <div class="cats" id="cats"></div>
+    <div class="field">
+      <label for="custom">Eigen filters</label>
+      <textarea id="custom" rows="3" placeholder='nwr["natural"="peak"]&#10;node["amenity"="bench"]'></textarea>
+      <small>Eén Overpass-filter per regel, zonder <code>(around:…)</code>. Dat voegt de app zelf toe.</small>
+    </div>
+    <div class="row">
+      <div class="field">
+        <label for="buffer">Afstand tot route</label>
+        <select id="buffer">
+          <option value="50">50 m</option><option value="100">100 m</option>
+          <option value="250" selected>250 m</option><option value="500">500 m</option>
+          <option value="1000">1 km</option><option value="2000">2 km</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="precision">Routepunten</label>
+        <select id="precision">
+          <option value="0.3" selected>Slim beperken</option>
+          <option value="0.1">Meer punten</option>
+          <option value="0">Alle punten</option>
+        </select>
+      </div>
+    </div>
+    <div class="row">
+      <div class="field">
+        <label for="endpoint">Server</label>
+        <select id="endpoint">
+          <option value="https://overpass-api.de/api/interpreter">overpass-api.de</option>
+          <option value="https://overpass.kumi.systems/api/interpreter">kumi.systems</option>
+          <option value="https://overpass.private.coffee/api/interpreter">private.coffee</option>
+          <option value="https://maps.mail.ru/osm/tools/overpass/api/interpreter">mail.ru</option>
+        </select>
+      </div>
+      <div></div>
+    </div>
+  </section>
+
+  <section class="step">
+    <h2><b>3</b>Ophalen</h2>
+    <div class="field" style="margin-top:0">
+      <label for="query">Overpass-query</label>
+      <textarea id="query" rows="7" spellcheck="false" placeholder="Laad eerst een route."></textarea>
+      <small id="qmeta">Je kunt de query hier aanpassen voor je hem uitvoert.</small>
+    </div>
+    <div class="actions">
+      <button class="primary" id="run" type="button" disabled>Data ophalen</button>
+      <button class="secondary" id="cancel" type="button" hidden>Annuleren</button>
+      <button class="secondary" id="turbo" type="button" disabled>Open in Overpass turbo</button>
+      <button class="secondary" id="copy" type="button" disabled>Kopieer query</button>
+    </div>
+    <div class="status" id="status" role="status" aria-live="polite"></div>
+  </section>
+  <section class="step">
+    <h2><b>4</b>Etappes maken</h2>
+    <p class="meta" style="margin:0">Splits je route in etappes die eindigen bij een overnachting of een treinstation.</p>
+    <div class="field">
+      <label for="stageMode">Splitsen bij</label>
+      <select id="stageMode">
+        <option value="stay" selected>Overnachtingen (dagetappes)</option>
+        <option value="train">Treinstations (lange secties)</option>
+        <option value="fixed">Vaste afstand (zonder zoeken)</option>
+      </select>
+    </div>
+    <div class="row">
+      <div class="field">
+        <label for="stageLen">Etappe (km)</label>
+        <input type="number" id="stageLen" min="1" max="500" step="1" value="25">
+      </div>
+      <div class="field" id="tolField">
+        <label for="stageTol">Mag afwijken (km)</label>
+        <input type="number" id="stageTol" min="0" max="200" step="1" value="10">
+      </div>
+    </div>
+    <small class="meta" id="stageHelp" style="display:block">Eerst wordt gezocht rond 25 km, dan tussen 25 en 35 km, en pas daarna tussen 15 en 25 km.</small>
+    <div class="field" id="stayField">
+      <label>Overnachten in</label>
+      <div class="cats" id="stayCats"></div>
+    </div>
+    <div class="field" id="bufField">
+      <label for="stayBuf" id="stayBufLabel">Overnachting maximaal van de route</label>
+      <select id="stayBuf">
+        <option value="250">250 m</option><option value="500">500 m</option>
+        <option value="1000" selected>1 km</option><option value="2000">2 km</option>
+        <option value="3000">3 km</option><option value="5000">5 km</option><option value="10000">10 km</option>
+      </select>
+    </div>
+    <div class="actions">
+      <button class="primary" id="makeStages" type="button" disabled>Etappes berekenen</button>
+      <button class="secondary" id="stageCancel" type="button" hidden>Annuleren</button>
+    </div>
+    <div class="status" id="stageStatus" role="status" aria-live="polite"></div>
+  </section>
+</aside>
+
+<main>
+  <div id="map" aria-label="Kaart met route en resultaten"></div>
+  <section class="results" id="stagesec" hidden>
+    <div class="reshead">
+      <h2 id="stagetitle">Etappes</h2>
+      <div class="actions" style="margin:0">
+        <button class="secondary" id="stageZip" type="button">Download alle etappes (ZIP)</button>
+        <button class="secondary" id="stageAll" type="button">Alles in één GPX</button>
+      </div>
+    </div>
+    <div id="stagebody"></div>
+  </section>
+  <section class="results">
+    <div class="reshead">
+      <h2 id="restitle">Resultaten</h2>
+      <div class="actions" style="margin:0">
+        <button class="secondary" id="exGpx" type="button" disabled>Download als GPX-waypoints</button>
+        <button class="secondary" id="exGeo" type="button" disabled>GeoJSON</button>
+        <button class="secondary" id="exCsv" type="button" disabled>CSV</button>
+      </div>
+    </div>
+    <div id="resbody"><p class="empty">Laad een route, kies wat je zoekt en klik op „Data ophalen”. De resultaten verschijnen hier, gesorteerd op kilometer langs de route.</p></div>
+  </section>
+</main>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script>
+"use strict";
+const PRESETS = [
+  {id:"water", label:"Drinkwater", color:"#2F7BB8", on:true,
+   filters:['nwr["amenity"="drinking_water"]','nwr["amenity"="water_point"]'],
+   match:t=>t.amenity==="drinking_water"||t.amenity==="water_point"},
+  {id:"toilets", label:"Toiletten", color:"#7A5BA6", on:true,
+   filters:['nwr["amenity"="toilets"]'], match:t=>t.amenity==="toilets"},
+  {id:"food", label:"Cafés en restaurants", color:"#C2571A",
+   filters:['nwr["amenity"~"^(cafe|restaurant|fast_food|pub|bar|biergarten)$"]'],
+   match:t=>/^(cafe|restaurant|fast_food|pub|bar|biergarten)$/.test(t.amenity||"")},
+  {id:"shop", label:"Supermarkten en bakkers", color:"#3E8E41",
+   filters:['nwr["shop"~"^(supermarket|convenience|bakery)$"]'],
+   match:t=>/^(supermarket|convenience|bakery)$/.test(t.shop||"")},
+  {id:"camp", label:"Campings", color:"#8A6D1F",
+   filters:['nwr["tourism"="camp_site"]'], match:t=>t.tourism==="camp_site"},
+  {id:"camper", label:"Camperplaatsen", color:"#C08A2E",
+   filters:['nwr["tourism"="caravan_site"]','nwr["amenity"="sanitary_dump_station"]'],
+   match:t=>t.tourism==="caravan_site"||t.amenity==="sanitary_dump_station"},
+  {id:"stay", label:"Hotels en B&B’s", color:"#A33A5B",
+   filters:['nwr["tourism"~"^(hotel|guest_house|hostel|motel)$"]'],
+   match:t=>/^(hotel|guest_house|hostel|motel)$/.test(t.tourism||"")},
+  {id:"cottage", label:"Vakantiehuisjes", color:"#6D4C9E",
+   filters:['nwr["tourism"~"^(chalet|apartment)$"]'],
+   match:t=>/^(chalet|apartment)$/.test(t.tourism||"")},
+  {id:"bike", label:"Fietsenwinkels en herstelpunten", color:"#1F7A7A",
+   filters:['nwr["shop"="bicycle"]','nwr["amenity"="bicycle_repair_station"]'],
+   match:t=>t.shop==="bicycle"||t.amenity==="bicycle_repair_station"},
+  {id:"rest", label:"Schuilhutten en picknickplekken", color:"#6B7A2E",
+   filters:['nwr["amenity"="shelter"]','nwr["tourism"="picnic_site"]','nwr["leisure"="picnic_table"]'],
+   match:t=>t.amenity==="shelter"||t.tourism==="picnic_site"||t.leisure==="picnic_table"},
+  {id:"sight", label:"Uitzichtpunten en bezienswaardigheden", color:"#B8860B",
+   filters:['nwr["tourism"~"^(viewpoint|attraction|museum)$"]'],
+   match:t=>/^(viewpoint|attraction|museum)$/.test(t.tourism||"")},
+  {id:"train", label:"Treinstations", color:"#24476B",
+   filters:['nwr["railway"~"^(station|halt)$"]["station"!~"^(subway|light_rail|monorail|funicular|miniature)$"]["usage"!="tourism"]["disused"!="yes"]'],
+   match:t=>/^(station|halt)$/.test(t.railway||"")},
+  {id:"charge", label:"Laadpunten", color:"#4A6FA5",
+   filters:['nwr["amenity"="charging_station"]'], match:t=>t.amenity==="charging_station"},
+];
+const CUSTOM = {id:"custom", label:"Eigen filter", color:"#6E6E6E"};
+const KIND = {drinking_water:"Drinkwaterpunt",water_point:"Waterpunt",toilets:"Toilet",cafe:"Café",restaurant:"Restaurant",
+  fast_food:"Snackbar",pub:"Kroeg",bar:"Bar",biergarten:"Biergarten",supermarket:"Supermarkt",convenience:"Buurtwinkel",
+  bakery:"Bakker",camp_site:"Camping",sanitary_dump_station:"Loospunt camper",caravan_site:"Camperplaats",hotel:"Hotel",guest_house:"B&B",hostel:"Hostel",
+  motel:"Motel",chalet:"Vakantiehuisje",station:"Treinstation",halt:"Stopplaats",apartment:"Vakantiewoning",bicycle:"Fietsenwinkel",bicycle_repair_station:"Fietsherstelpunt",shelter:"Schuilhut",
+  picnic_site:"Picknickplek",picnic_table:"Picknicktafel",viewpoint:"Uitzichtpunt",attraction:"Bezienswaardigheid",
+  museum:"Museum",charging_station:"Laadpunt"};
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const state = {segs:[], flat:[], cum:[], proj:null, name:"", results:[], abort:null, hidden:new Set(), excluded:new Set(), pool:null};
+const visibleResults = () => state.results.filter(r => !state.hidden.has(r.cat.id));
+
+/* ---------- Kaart ---------- */
+const map = L.map("map",{zoomControl:true}).setView([51.0,4.4],8);
+// Kaarttegels. Sommige servers (OSM, CARTO) weigeren pagina's die als lokaal bestand
+// (file://) geopend zijn. Daarom: keuze uit meerdere kaarten, en automatisch
+// overschakelen als een kaart niet laadt.
+const OSM_ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>-bijdragers';
+const BASES = [
+  {name:"Topografisch (Esri)", url:"https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}",
+   opt:{maxZoom:19, attribution:"Tegels &copy; Esri, bronnen: Esri, HERE, Garmin, &copy; OpenStreetMap-bijdragers en anderen"}},
+  {name:"Straten (Esri)", url:"https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}",
+   opt:{maxZoom:19, attribution:"Tegels &copy; Esri, bronnen: Esri, HERE, Garmin, &copy; OpenStreetMap-bijdragers en anderen"}},
+  {name:"Luchtfoto (Esri)", url:"https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+   opt:{maxZoom:19, attribution:"Tegels &copy; Esri, Maxar, Earthstar Geographics"}},
+  {name:"OpenTopoMap", url:"https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png",
+   opt:{maxZoom:17, subdomains:"abc", attribution:OSM_ATTR+', &copy; <a href="https://opentopomap.org">OpenTopoMap</a> (CC-BY-SA)'}},
+  {name:"OpenStreetMap (alleen via webserver)", url:"https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+   opt:{maxZoom:19, attribution:OSM_ATTR}},
+].map(b => ({...b, layer:L.tileLayer(b.url, b.opt), ok:0, err:0}));
+const baseControl = {};
+BASES.forEach(b => {
+  baseControl[b.name] = b.layer;
+  b.layer.on("tileload", () => b.ok++);
+  b.layer.on("tileerror", () => {
+    b.err++;
+    if (b.ok === 0 && b.err >= 4 && map.hasLayer(b.layer)){
+      const next = BASES.find(x => x !== b && x.err < 4);
+      if (next){ map.removeLayer(b.layer); next.layer.addTo(map);
+        setStatus(`De kaart „${b.name}” laadt hier niet; overgeschakeld naar „${next.name}”.`); }
+    }
+  });
+});
+const isFile = location.protocol === "file:";
+(isFile ? BASES[0] : BASES[4]).layer.addTo(map);
+L.control.layers(baseControl, null, {position:"topright"}).addTo(map);
+const trackLayer = L.layerGroup().addTo(map);
+const poiLayer = L.layerGroup().addTo(map);
+const stageLayer = L.layerGroup().addTo(map);
+const routeColor = () => getComputedStyle(document.documentElement).getPropertyValue("--route").trim();
+
+/* ---------- Categorieën ---------- */
+$("cats").innerHTML = PRESETS.map(p =>
+  `<label><input type="checkbox" value="${p.id}" ${p.on?"checked":""}><span class="swatch" style="background:${p.color}"></span>${esc(p.label)}</label>`).join("");
+
+$("stayCats").innerHTML = PRESETS.filter(p => ["camp","camper","stay","cottage"].includes(p.id)).map(p =>
+  `<label><input type="checkbox" value="${p.id}" ${p.id!=="camper"?"checked":""}><span class="swatch" style="background:${p.color}"></span>${esc(p.label)}</label>`).join("");
+const fmt = n => n.toLocaleString("nl-BE",{minimumFractionDigits:1, maximumFractionDigits:1});
+
+/* ---------- Geometrie ---------- */
+function haversine(a,b){
+  const R=6371008.8, r=Math.PI/180, dLat=(b[0]-a[0])*r, dLon=(b[1]-a[1])*r;
+  const h=Math.sin(dLat/2)**2+Math.cos(a[0]*r)*Math.cos(b[0]*r)*Math.sin(dLon/2)**2;
+  return 2*R*Math.asin(Math.sqrt(h));
+}
+function makeProj(pts){
+  const lat0 = pts.reduce((s,p)=>s+p[0],0)/pts.length;
+  const kx = 111320*Math.cos(lat0*Math.PI/180), ky = 110540;
+  return p => [p[1]*kx, p[0]*ky];
+}
+function segDist(p,a,b){
+  const dx=b[0]-a[0], dy=b[1]-a[1], L=dx*dx+dy*dy;
+  let t = L ? ((p[0]-a[0])*dx+(p[1]-a[1])*dy)/L : 0;
+  t = Math.max(0,Math.min(1,t));
+  return {d:Math.hypot(p[0]-(a[0]+t*dx), p[1]-(a[1]+t*dy)), t};
+}
+function simplify(pts, tol, proj){            // Douglas-Peucker, iteratief
+  if (pts.length < 3) return pts.slice();
+  const P = pts.map(proj), keep = new Uint8Array(pts.length);
+  keep[0] = keep[pts.length-1] = 1;
+  const stack = [[0, pts.length-1]];
+  while (stack.length){
+    const [a,b] = stack.pop(); let max=0, idx=-1;
+    for (let i=a+1;i<b;i++){ const d=segDist(P[i],P[a],P[b]).d; if (d>max){max=d; idx=i;} }
+    if (max > tol && idx > 0){ keep[idx]=1; stack.push([a,idx],[idx,b]); }
+  }
+  return pts.filter((_,i)=>keep[i]);
+}
+
+/* ---------- GPX ---------- */
+function parseGPX(text){
+  const doc = new DOMParser().parseFromString(text, "application/xml");
+  if (doc.getElementsByTagName("parsererror").length) throw new Error("Dit bestand is geen geldige GPX: het XML kan niet gelezen worden.");
+  const read = (parentTag, ptTag) => [...doc.getElementsByTagName(parentTag)]
+    .map(s => [...s.getElementsByTagName(ptTag)].map(p => { const e = p.getElementsByTagName("ele")[0]; const pt = [parseFloat(p.getAttribute("lat")), parseFloat(p.getAttribute("lon"))]; if (e && isFinite(parseFloat(e.textContent))) pt.push(parseFloat(e.textContent)); return pt; })
+    .filter(p => isFinite(p[0]) && isFinite(p[1]))).filter(s => s.length > 1);
+  let segs = read("trkseg","trkpt");
+  if (!segs.length) segs = read("rte","rtept");
+  if (!segs.length) throw new Error("Geen track of route gevonden in dit bestand. Een GPX met alleen waypoints werkt niet.");
+  const nameEl = doc.getElementsByTagName("name")[0];
+  return {segs, name: nameEl ? nameEl.textContent.trim() : ""};
+}
+function loadTrack({segs,name}, label){
+  state.segs = segs; state.name = name || label;
+  state.flat = segs.flat();
+  state.proj = makeProj(state.flat);
+  state.cum = [0];
+  for (let i=1;i<state.flat.length;i++) state.cum.push(state.cum[i-1] + haversine(state.flat[i-1], state.flat[i]));
+  trackLayer.clearLayers(); poiLayer.clearLayers();
+  const line = L.polyline(segs, {color:routeColor(), weight:5, opacity:.9}).addTo(trackLayer);
+  L.circleMarker(state.flat[0],{radius:6,color:"#fff",weight:2,fillColor:"#1E2A2B",fillOpacity:1}).bindTooltip("Start").addTo(trackLayer);
+  L.circleMarker(state.flat.at(-1),{radius:6,color:"#fff",weight:2,fillColor:routeColor(),fillOpacity:1}).bindTooltip("Einde").addTo(trackLayer);
+  map.fitBounds(line.getBounds(), {padding:[24,24]});
+  const km = state.cum.at(-1)/1000;
+  $("trackinfo").innerHTML = `<b>${esc(state.name)}</b><br>${km.toLocaleString("nl-BE",{maximumFractionDigits:1})} km, ${state.flat.length.toLocaleString("nl-BE")} punten`;
+  state.results = []; renderResults();
+  state.stages = []; state.pool = null; state.excluded.clear(); renderStages(); stageStatus("");
+  $("makeStages").disabled = false;
+  setStatus("");
+  rebuildQuery();
+}
+
+/* ---------- Query ---------- */
+function selectedFilters(){
+  const ids = [...document.querySelectorAll("#cats input:checked")].map(i=>i.value);
+  const f = PRESETS.filter(p=>ids.includes(p.id)).flatMap(p=>p.filters);
+  const custom = $("custom").value.split("\n").map(s=>s.trim()).filter(Boolean);
+  const bad = custom.find(s => !/^(node|way|rel|relation|nwr|nw|nr|wr|area)\b/.test(s));
+  if (bad) throw new Error(`Eigen filter „${bad}” moet beginnen met node, way, rel of nwr.`);
+  return f.concat(custom.map(s => s.replace(/;\s*$/,"")));
+}
+function buildQuery(filters, buf, factor){
+  // De vereenvoudigde lijn wijkt hoogstens `tol` meter af van je echte route.
+  // Daarom zoeken we met een ruimere marge (buf + tol) en filteren we achteraf
+  // op de echte afstand tot de volledige track. Zo mis je niets.
+  const tol = factor ? Math.max(5, buf*factor) : 0;
+  const qbuf = buf + Math.ceil(tol);
+  const chunks = [];
+  for (const sg of state.segs){
+    const simple = tol ? simplify(sg, tol, state.proj) : sg;
+    for (let i=0;i<simple.length-1;i+=199) chunks.push(simple.slice(i, i+200));
+  }
+  const arounds = chunks.map(c => `(around:${qbuf},${c.map(p=>p[0].toFixed(5)+","+p[1].toFixed(5)).join(",")})`);
+  const body = filters.flatMap(f => arounds.map(x => `  ${f}${x};`)).join("\n");
+  return {q:`[out:json][timeout:180];\n(\n${body}\n);\nout center tags;`, pts:chunks.reduce((n,c)=>n+c.length,0), tol, qbuf};
+}
+function rebuildQuery(){
+  if (!state.segs.length){ toggleButtons(false); return; }
+  let filters;
+  try { filters = selectedFilters(); } catch(e){ setStatus(e.message, true); toggleButtons(false); return; }
+  if (!filters.length){ $("query").value=""; $("qmeta").textContent="Kies minstens één categorie of voeg een eigen filter toe."; toggleButtons(false); return; }
+  const buf = +$("buffer").value;
+  const {q, pts, tol, qbuf} = buildQuery(filters, buf, +$("precision").value);
+  $("query").value = q;
+  const kb = new Blob([q]).size/1024;
+  $("qmeta").textContent = (tol
+      ? `${pts} van ${state.flat.length} routepunten gebruikt. Er wordt gezocht tot ${qbuf} m en daarna exact gefilterd op ${buf} m van je volledige route, dus je mist niets.`
+      : `Alle ${pts} routepunten gebruikt.`) + ` Query: ${kb.toFixed(0)} kB.` +
+    (kb > 400 ? " Dat is groot: kies minder categorieën of een kleinere afstand als de server weigert." : "");
+  setStatus("");
+  toggleButtons(true);
+}
+function toggleButtons(on){ ["run","turbo","copy"].forEach(id => $(id).disabled = !on); }
+function setStatus(msg, err=false){ $("status").textContent = msg; $("status").className = "status" + (err?" err":""); }
+
+/* ---------- Overpass ---------- */
+const RETRYABLE = new Set([429, 502, 503, 504]);
+function serverError(status, txt){
+  return status===429 ? "Te veel verzoeken na elkaar."
+    : status===502 ? "De server is tijdelijk overbelast (fout 502)."
+    : status===503 ? "De server is tijdelijk niet beschikbaar (fout 503)."
+    : status===504 ? "De zoekopdracht duurde te lang voor de server (fout 504)."
+    : status===400 ? "De query bevat een fout: " + (txt.match(/Error: ([^<]+)/)?.[1] || "controleer je eigen filters.")
+    : `De server antwoordde met fout ${status}.`;
+}
+/* Probeert eerst de gekozen server. Is die overbelast of onbereikbaar,
+   dan automatisch de volgende servers uit de lijst. */
+async function fetchOverpass(q, signal, onSwitch = () => {}){
+  const chosen = $("endpoint").value;
+  const all = [...$("endpoint").options].map(o => ({url:o.value, name:o.textContent}));
+  const order = [all.find(x => x.url === chosen), ...all.filter(x => x.url !== chosen)];
+  const failures = [];
+  for (const [n, srv] of order.entries()){
+    if (n > 0) onSwitch(srv.name, failures.at(-1));
+    let res;
+    try {
+      res = await fetch(srv.url, {method:"POST", signal,
+        headers:{"Content-Type":"application/x-www-form-urlencoded"}, body:"data="+encodeURIComponent(q)});
+    } catch(e){
+      if (e.name === "AbortError") throw e;
+      failures.push(`${srv.name}: niet bereikbaar`); continue;
+    }
+    if (!res.ok){
+      const txt = await res.text().catch(()=> "");
+      if (RETRYABLE.has(res.status)){ failures.push(`${srv.name}: ${serverError(res.status)}`); continue; }
+      throw new Error(serverError(res.status, txt));
+    }
+    let json;
+    try { json = await res.json(); } catch { failures.push(`${srv.name}: onleesbaar antwoord`); continue; }
+    if (json.remark && /timed out|out of memory/i.test(json.remark)){ failures.push(`${srv.name}: ${json.remark}`); continue; }
+    if (json.remark && /error/i.test(json.remark)) throw new Error("Overpass meldt: " + json.remark);
+    if (n > 0) $("endpoint").value = srv.url;   // onthoud de server die wel werkte
+    return json.elements || [];
+  }
+  throw new Error("Geen enkele server kon de zoekopdracht uitvoeren. " + failures.join(" ") +
+    " Probeer het over een paar minuten opnieuw, of maak de zoekopdracht kleiner (kleinere afstand of minder categorieën).");
+}
+async function runQuery(){
+  const q = $("query").value.trim(); if (!q) return;
+  state.abort = new AbortController();
+  $("run").disabled = true; $("cancel").hidden = false;
+  const t0 = Date.now();
+  let via = "";
+  const tick = setInterval(()=>setStatus(`${via}Bezig met ophalen… ${Math.round((Date.now()-t0)/1000)} s. Lange routes kunnen een minuut duren.`), 1000);
+  setStatus("Bezig met ophalen…"); renderResults();
+  try{
+    processElements(await fetchOverpass(q, state.abort.signal, (name, why) => { via = `${why} Nu via ${name}. `; }));
+    setStatus(`${state.results.length} resultaten opgehaald in ${Math.round((Date.now()-t0)/1000)} s.`);
+  } catch(e){
+    if (e.name === "AbortError") setStatus("Ophalen geannuleerd."); else setStatus(e.message, true);
+  } finally {
+    clearInterval(tick); $("run").disabled = false; $("cancel").hidden = true; state.abort = null; renderResults();
+  }
+}
+function toResults(elements, presets, buf){
+  const seen = new Set(), P = state.flat.map(state.proj), out = [];
+  for (const el of elements){
+    const key = el.type + "/" + el.id; if (seen.has(key)) continue; seen.add(key);
+    const lat = el.lat ?? el.center?.lat, lon = el.lon ?? el.center?.lon;
+    if (lat == null) continue;
+    const t = el.tags || {};
+    const cat = presets.find(p=>p.match(t)) || CUSTOM;
+    const pp = state.proj([lat,lon]);
+    let best = {d:Infinity, i:0, t:0};
+    for (let i=0;i<P.length-1;i++){ const r = segDist(pp,P[i],P[i+1]); if (r.d < best.d) best = {d:r.d, i, t:r.t}; }
+    if (best.d > buf) continue;
+    const km = (state.cum[best.i] + best.t*(state.cum[best.i+1]-state.cum[best.i]))/1000;
+    const kv = t.amenity || t.shop || t.tourism || t.leisure || t.railway || t.historic || t.natural || "";
+    const kind = KIND[kv] || (kv ? kv.replace(/_/g," ") : cat.label);
+    out.push({key, type:el.type, id:el.id, lat, lon, tags:t, cat, kind, seg:best.i, t:best.t,
+      name: t.name || t.brand || t.operator || kind, km, dist: Math.round(best.d)});
+  }
+  return out.sort((a,b)=>a.km-b.km);
+}
+function processElements(elements){
+  const active = [...document.querySelectorAll("#cats input:checked")].map(i=>i.value);
+  state.results = toResults(elements, PRESETS.filter(p=>active.includes(p.id)), +$("buffer").value);
+  renderResults();
+}
+
+/* ---------- Etappes ---------- */
+function cutAtKm(km){
+  const m = km*1000, C = state.cum;
+  let i = 0; while (i < C.length-2 && C[i+1] < m) i++;
+  const L = C[i+1]-C[i];
+  return {i, t: L ? Math.min(1, Math.max(0, (m-C[i])/L)) : 0};
+}
+function pointAt({i,t}){
+  const a = state.flat[i], b = state.flat[i+1] || a;
+  const p = [a[0]+(b[0]-a[0])*t, a[1]+(b[1]-a[1])*t];
+  if (a[2]!=null && b[2]!=null) p.push(a[2]+(b[2]-a[2])*t);
+  return p;
+}
+function stagePoints(st){
+  return [pointAt(st.startCut), ...state.flat.slice(st.startCut.i+1, st.endCut.i+1), pointAt(st.endCut)];
+}
+/* Per etappe, gerekend vanaf het begin van die etappe:
+   1. een overnachting rond de doelafstand (± 0,5 km)
+   2. anders: de eerste tussen doel en doel + afwijking (zo dicht mogelijk bij het doel)
+   3. anders: de laatste tussen doel − afwijking en doel (zo dicht mogelijk bij het doel)
+   4. anders: splitsen op exact de doelafstand, met een opmerking.
+   Is wat overblijft niet langer dan doel + afwijking, dan is dat de laatste etappe. */
+/* Zoekt in `list` volgens de regels: rond het doel, dan langer, dan korter. */
+function pickStop(list, startKm, total, target, tol){
+  const goal = startKm + target;
+  const inRange = (lo, hi) => list.filter(c => c.km >= lo && c.km <= hi && c.km > startKm + 0.5 && c.km < total - 0.5);
+  const near = inRange(goal-0.5, goal+0.5).sort((a,b)=>Math.abs(a.km-goal)-Math.abs(b.km-goal) || a.dist-b.dist)[0];
+  if (near) return {c:near, how:""};
+  const longer = inRange(goal, goal+tol)[0];
+  if (longer) return {c:longer, how:`${fmt(longer.km-goal)} km langer`};
+  const shorter = inRange(goal-tol, goal).at(-1);
+  if (shorter) return {c:shorter, how:`${fmt(goal-shorter.km)} km korter`};
+  return null;
+}
+function computeStages(cands, total, target, tol, noun = "overnachting", fallback = [], startKm = 0, startCut = {i:0, t:0}){
+  const stages = [];
+  const range = `${Math.max(0,target-tol)} en ${target+tol} km`;
+  while (total - startKm > target + tol){
+    const goal = startKm + target;
+    let hit = pickStop(cands, startKm, total, target, tol), note = "", isFallback = false;
+    if (hit){ if (hit.how) note = `Geen ${noun} rond ${target} km; etappe ${hit.how}.`; }
+    else if (fallback.length && (hit = pickStop(fallback, startKm, total, target, tol))){
+      isFallback = true;
+      note = `Geen ${noun} tussen ${range}; daarom gesplitst bij een overnachting` + (hit.how ? ` (etappe ${hit.how}).` : ".");
+    }
+    let endKm, endCut, c = hit ? hit.c : null;
+    if (c){ endKm = c.km; endCut = {i:c.seg, t:c.t}; }
+    else { endKm = goal; endCut = cutAtKm(goal);
+      note = `Geen ${noun}${fallback.length ? " en ook geen hotel of camping" : ""} tussen ${range}; gesplitst op exact ${target} km.`; }
+    stages.push({from:startKm, to:endKm, startCut, endCut, stay:c, note, fallback:isFallback});
+    startKm = endKm; startCut = endCut;
+  }
+  stages.push({from:startKm, to:total, startCut, endCut:{i:state.flat.length-2, t:1}, stay:null, note:"", last:true});
+  return stages;
+}
+const STAGE_MODES = {
+  stay: {len:25, tol:10, buf:1000, noun:"overnachting", nouns:"overnachtingen", col:"Overnachting", wpt:"Overnachting: ", from:"Vertrek: "},
+  fixed:{len:20, tol:0, buf:1000, noun:"splitspunt", nouns:"splitspunten", col:"Eindpunt", wpt:"", from:""},
+  train:{len:150, tol:50, buf:3000, noun:"treinstation", nouns:"treinstations", col:"Station", wpt:"Station: ", from:"Vertrek station: "},
+};
+const modeValues = {stay:{len:25, tol:10, buf:1000}, train:{len:150, tol:50, buf:3000}, fixed:{len:20, tol:0, buf:1000}};
+const curMode = () => STAGE_MODES[$("stageMode").value];
+function switchMode(){
+  const prev = state.prevMode || "stay", next = $("stageMode").value;
+  modeValues[prev] = {len:+$("stageLen").value, tol:+$("stageTol").value, buf:+$("stayBuf").value};
+  const v = modeValues[next];
+  $("stageLen").value = v.len; $("stageTol").value = v.tol; $("stayBuf").value = v.buf;
+  $("stayField").hidden = next !== "stay";
+  $("tolField").hidden = $("bufField").hidden = next === "fixed";
+  $("stayBufLabel").textContent = next === "train" ? "Station maximaal van de route" : "Overnachting maximaal van de route";
+  state.prevMode = next; updateStageHelp();
+}
+function stageStatus(msg, err=false){ $("stageStatus").textContent = msg; $("stageStatus").className = "status" + (err?" err":""); }
+function updateStageHelp(){
+  const t = +$("stageLen").value || 0, d = +$("stageTol").value || 0;
+  if ($("stageMode").value === "fixed"){
+    $("stageHelp").textContent = `De route wordt geknipt op elke ${t} km. Het laatste stuk is wat overblijft.`; return; }
+  $("stageHelp").textContent = `Etappes van ${Math.max(0,t-d)} tot ${t+d} km. Eerst wordt gezocht rond ${t} km, dan tussen ${t} en ${t+d} km, en pas daarna tussen ${Math.max(0,t-d)} en ${t} km.`;
+}
+async function makeStages(){
+  if (!state.segs.length) return;
+  const total = state.cum.at(-1)/1000, target = +$("stageLen").value, tol = Math.max(0, +$("stageTol").value || 0);
+  if (!(target > 0)) return stageStatus("Vul een etappelengte in.", true);
+  if ($("stageMode").value === "fixed"){
+    if (total <= target){ state.stages = []; state.pool = null; renderStages();
+      return stageStatus(`Je route is ${fmt(total)} km en is dus korter dan ${target} km. Er valt niets te splitsen.`); }
+    const st = []; let from = 0, startCut = {i:0, t:0};
+    while (total - from > target + 0.05){
+      const to = from + target, endCut = cutAtKm(to);
+      st.push({from, to, startCut, endCut, stay:null, note:""});
+      from = to; startCut = endCut;
+    }
+    st.push({from, to:total, startCut, endCut:{i:state.flat.length-2, t:1}, stay:null, note:"", last:true});
+    state.pool = null; state.stageM = STAGE_MODES.fixed; state.stages = st; renderStages();
+    const restKm = total - from;
+    stageStatus(`Route geknipt in ${st.length} stukken van ${target} km` + (Math.abs(restKm-target) > 0.05 ? `; het laatste stuk is ${fmt(restKm)} km.` : "."));
+    $("stagesec").scrollIntoView({behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth"});
+    return;
+  }
+  if (total <= target + tol){ state.stages = []; renderStages();
+    return stageStatus(`Je route is ${fmt(total)} km en past dus in één etappe. Er valt niets te splitsen.`); }
+  const M = curMode(), mode = $("stageMode").value;
+  const ids = mode === "train" ? ["train","camp","stay"] : [...document.querySelectorAll("#stayCats input:checked")].map(i=>i.value);
+  if (!ids.length) return stageStatus("Kies minstens één soort overnachting.", true);
+  const presets = PRESETS.filter(p=>ids.includes(p.id)), buf = +$("stayBuf").value;
+  const {q} = buildQuery(presets.flatMap(p=>p.filters), buf, 0.3);
+  state.stageAbort = new AbortController();
+  $("makeStages").disabled = true; $("stageCancel").hidden = false;
+  const t0 = Date.now();
+  let via = "";
+  const tick = setInterval(()=>stageStatus(`${via}${M.nouns[0].toUpperCase()+M.nouns.slice(1)} zoeken… ${Math.round((Date.now()-t0)/1000)} s`), 1000);
+  stageStatus(`${M.nouns[0].toUpperCase()+M.nouns.slice(1)} zoeken…`);
+  try {
+    const cands = toResults(await fetchOverpass(q, state.stageAbort.signal, (name, why) => { via = `${why} Nu via ${name}. `; }), presets, buf).filter(r => r.cat !== CUSTOM);
+    const primary = mode === "train" ? cands.filter(r => r.cat.id === "train") : cands;
+    const fallback = mode === "train" ? cands.filter(r => r.cat.id !== "train") : [];
+    state.pool = {primary, fallback, total, target, tol, noun:M.noun, mode};
+    state.stages = computeStages(...poolArgs()); state.stageM = M;
+    renderStages();
+    const missing = state.stages.filter(st => !st.stay && !st.last).length;
+    const nFb = state.stages.filter(st => st.fallback).length;
+    stageStatus(`${primary.length} ${M.nouns} gevonden langs de route.` + (nFb ? ` Bij ${nFb} etappe${nFb>1?"s":""} was er geen station en werd een hotel of camping gekozen.` : "") +
+      (missing ? ` Bij ${missing} etappe${missing>1?"s":""} lag er niets binnen de afwijking: vergroot de afwijking of de afstand tot de route.` : ""), missing > 0);
+    $("stagesec").scrollIntoView({behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth"});
+  } catch(e){
+    if (e.name === "AbortError") stageStatus("Zoeken geannuleerd."); else stageStatus(e.message, true);
+  } finally {
+    clearInterval(tick); $("makeStages").disabled = false; $("stageCancel").hidden = true; state.stageAbort = null;
+  }
+}
+const notExcluded = r => !state.excluded.has(r.key);
+function poolArgs(startKm = 0, startCut = {i:0, t:0}){
+  const P = state.pool;
+  return [P.primary.filter(notExcluded), P.total, P.target, P.tol, P.noun, P.fallback.filter(notExcluded), startKm, startCut];
+}
+/* Houdt etappes 0..i-1, zet eventueel een zelf gekozen eindpunt voor etappe i,
+   en rekent de rest van de route opnieuw uit. */
+function recomputeFrom(i, chosen = null){
+  const keep = state.stages.slice(0, i), prev = keep.at(-1);
+  let startKm = prev ? prev.to : 0, startCut = prev ? prev.endCut : {i:0, t:0};
+  const mid = [];
+  if (chosen){
+    mid.push({from:startKm, to:chosen.km, startCut, endCut:{i:chosen.seg, t:chosen.t}, stay:chosen, manual:true,
+      fallback: state.pool.mode === "train" && chosen.cat.id !== "train", note:"Zelf gekozen."});
+    startKm = chosen.km; startCut = {i:chosen.seg, t:chosen.t};
+  }
+  state.stages = [...keep, ...mid, ...computeStages(...poolArgs(startKm, startCut))];
+  renderStages();
+}
+function alternatives(st){
+  const P = state.pool;
+  const lo = st.from + Math.max(0.5, P.target - P.tol), hi = Math.min(P.total - 0.5, st.from + P.target + P.tol);
+  return [...P.primary, ...P.fallback].filter(r => notExcluded(r) && r.km >= lo && r.km <= hi && r !== st.stay).sort((a,b)=>a.km-b.km);
+}
+function renderStages(){
+  stageLayer.clearLayers();
+  const S = state.stages || [];
+  $("stagesec").hidden = !S.length;
+  if (!S.length) return;
+  const colors = [routeColor(), "#2F7BB8"];
+  S.forEach((st,i) => {
+    L.polyline(stagePoints(st), {color:colors[i%2], weight:6, opacity:.95}).bindTooltip(`Etappe ${i+1}, ${fmt(st.to-st.from)} km`, {sticky:true}).addTo(stageLayer);
+    if (st.stay) L.marker([st.stay.lat, st.stay.lon], {icon:L.divIcon({className:"stage-pin", html:String(i+1), iconSize:[26,26]})})
+      .bindPopup(popupHtml(st.stay) + `<br><b>Einde etappe ${i+1}</b>`).addTo(stageLayer);
+  });
+  const total = state.cum.at(-1)/1000, M = state.stageM || STAGE_MODES.stay;
+  $("stagetitle").textContent = `${S.length} etappes over ${fmt(total)} km`;
+  const nEx = state.excluded.size;
+  const rows = S.map((st,i) => {
+    let tools = "";
+    if (!st.last && state.pool){
+      const alts = alternatives(st), isTrain = state.pool.mode === "train";
+      const opts = alts.map(r => `<option value="${r.key}">km ${fmt(r.km)} (${fmt(r.km-st.from)} km): ${esc(r.name)}, ${esc(r.kind)}${isTrain && r.cat.id!=="train" ? " [overnachting]" : ""}, ${r.dist} m van route</option>`).join("");
+      tools = `<span class="tools">
+        <select data-alt="${i}" aria-label="Ander eindpunt voor etappe ${i+1}"><option value="">${alts.length ? `Ander eindpunt kiezen (${alts.length})` : "Geen alternatieven binnen de afwijking"}</option>${opts}</select>
+        ${st.stay ? `<button class="linkbtn" type="button" data-ex="${i}">Bestaat niet of voldoet niet</button>` : ""}</span>`;
+    }
+    const end = st.stay
+      ? `<span class="kind"><span class="swatch" style="background:${st.stay.cat.color}"></span>${esc(st.stay.name)}</span><span class="sub">${esc(st.stay.kind)}, ${st.stay.dist} m van de route, <a href="https://www.openstreetmap.org/${st.stay.type}/${st.stay.id}" target="_blank" rel="noopener">OSM</a></span>`
+      : (st.last ? "Einde van de route" : (M === STAGE_MODES.fixed ? `Geknipt op km ${fmt(st.to)}` : `Geen ${M.noun}`));
+    return `<tr data-stage="${i}" tabindex="0"><td class="num">${i+1}</td><td class="num">${fmt(st.from)} – ${fmt(st.to)}</td>
+      <td class="num"><b>${fmt(st.to-st.from)} km</b></td><td>${end}${st.note?`<span class="${st.manual?"sub":"note"}">${esc(st.note)}</span>`:""}${tools}</td>
+      <td><button class="secondary small" type="button" data-dl="${i}">GPX</button></td></tr>`;
+  }).join("");
+  $("stagebody").innerHTML = `<div class="tablewrap"><table>
+    <thead><tr><th class="num">Etappe</th><th class="num">km</th><th class="num">Lengte</th><th>${M.col}</th><th>Download</th></tr></thead>
+    <tbody>${rows}</tbody></table></div>` +
+    (nEx ? `<p class="meta">${nEx} plaats${nEx>1?"en":""} uitgesloten. <button class="linkbtn" type="button" id="unexclude">Alles terugzetten</button></p>` : "");
+}
+
+/* ---------- Weergave ---------- */
+const markers = new Map();
+function popupHtml(r){
+  const extra = [r.tags.opening_hours && `Open: ${esc(r.tags.opening_hours)}`, r.tags.website && `<a href="${esc(r.tags.website)}" target="_blank" rel="noopener">Website</a>`].filter(Boolean).join("<br>");
+  return `<h3>${esc(r.name)}</h3>${esc(r.kind)}<br>km ${r.km.toFixed(1)}, ${r.dist} m van de route${extra?"<br>"+extra:""}<br>
+    <a href="https://www.openstreetmap.org/${r.type}/${r.id}" target="_blank" rel="noopener">Bekijk op OpenStreetMap</a>`;
+}
+function focusResult(key){
+  const m = markers.get(key); if (!m) return;
+  map.flyTo(m.getLatLng(), Math.max(map.getZoom(),16), {duration:.6});
+  m.openPopup();
+  $("map").scrollIntoView({behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block:"start"});
+}
+function renderResults(){
+  poiLayer.clearLayers(); markers.clear();
+  const ALL = state.results, has = ALL.length > 0, R = visibleResults();
+  ["exGpx","exGeo","exCsv"].forEach(id => { $(id).disabled = !R.length;
+    $(id).title = R.length ? "" : "Beschikbaar zodra er resultaten zijn"; });
+  $("restitle").textContent = !has ? "Resultaten"
+    : R.length === ALL.length ? `${ALL.length} resultaten langs de route` : `${R.length} van ${ALL.length} resultaten langs de route`;
+  if (!has){
+    $("resbody").innerHTML = state.abort
+      ? `<p class="empty">Bezig met ophalen. De downloadknoppen worden actief zodra de resultaten binnen zijn.</p>`
+      : state.segs.length && state.ran
+      ? `<p class="empty">Niets gevonden binnen deze afstand. Vergroot de afstand tot de route of kies andere categorieën.</p>`
+      : `<p class="empty">Laad een route, kies wat je zoekt en klik op „Data ophalen”. De resultaten verschijnen hier, gesorteerd op kilometer langs de route.</p>`;
+    return;
+  }
+  for (const r of R){
+    const m = L.circleMarker([r.lat,r.lon],{radius:7,color:"#fff",weight:2,fillColor:r.cat.color,fillOpacity:1})
+      .bindPopup(() => popupHtml(r) + `<div class="popsegs"><label for="seg-pop-${r.id}"><b>GPX tot hier, vertrekken vanaf:</b></label>${segPicker(r, "pop")}</div>`, {minWidth:260})
+      .addTo(poiLayer);
+    markers.set(r.key, m);
+  }
+  const total = state.cum.at(-1)/1000;
+  const cats = [...new Map(ALL.map(r=>[r.cat.id, r.cat])).values()];
+  const step = [1,2,5,10,20,25,50,100,200].find(s => total/s <= 10) || 500;
+  let ticks = ""; for (let k=0;k<=total;k+=step) ticks += `<span class="tick" style="left:${k/total*100}%">${k}</span>`;
+  const lanes = cats.map(c => {
+    const on = !state.hidden.has(c.id), n = ALL.filter(r=>r.cat.id===c.id).length;
+    const dots = !on ? "" : R.filter(r=>r.cat.id===c.id).map(r =>
+      `<button class="dot" data-key="${r.key}" style="left:${r.km/total*100}%;background:${c.color}" title="${esc(r.name)}, km ${r.km.toFixed(1)}" aria-label="${esc(r.name)}, km ${r.km.toFixed(1)}"></button>`).join("");
+    return `<div class="lane"><button type="button" class="toggle" data-cat="${c.id}" aria-pressed="${on}" title="${on?"Verberg":"Toon"} ${esc(c.label)}"><span class="swatch" style="background:${c.color}"></span>${esc(c.label)} (${n})</button><div class="track">${dots}</div></div>`;
+  }).join("");
+  const rows = R.map(r => `<tr data-key="${r.key}" tabindex="0">
+      <td class="num">${r.km.toFixed(1)}</td><td>${esc(r.name)}</td>
+      <td><span class="kind"><span class="swatch" style="background:${r.cat.color}"></span>${esc(r.kind)}</span></td>
+      <td class="num">${r.dist} m</td>
+      <td><a href="https://www.openstreetmap.org/${r.type}/${r.id}" target="_blank" rel="noopener">OSM</a></td>
+      <td class="segcell"><button class="secondary small" type="button" data-segopen="${r.key}">GPX…</button></td></tr>`).join("");
+  $("resbody").innerHTML = `
+    <p class="filterhint">Klik op een categorie om ze te tonen of te verbergen. Kaart, tabel en downloads volgen je keuze.</p>
+    <div class="strip"><div class="strip-inner">${lanes}
+      <div class="ruler"><span class="meta" style="margin:8px 0 0">km</span><div class="bar">${ticks}</div></div>
+    </div></div>
+    <div class="tablewrap"><table>
+      <thead><tr><th class="num">km</th><th>Naam</th><th>Soort</th><th class="num">Van route</th><th>Link</th><th>GPX</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>`;
+}
+$("resbody").addEventListener("click", e => {
+  if (e.target.closest("a, select, [data-seg], [data-segopen], [data-segend]")) return;
+  const tg = e.target.closest("[data-cat]");
+  if (tg){ const id = tg.dataset.cat; state.hidden.has(id) ? state.hidden.delete(id) : state.hidden.add(id); renderResults(); return; }
+  const el = e.target.closest("[data-key]"); if (el) focusResult(el.dataset.key);
+});
+$("resbody").addEventListener("keydown", e => {
+  if (e.target.closest("button, a, select")) return;
+  const el = e.target.closest("tr[data-key]"); if (el && (e.key==="Enter"||e.key===" ")){ e.preventDefault(); focusResult(el.dataset.key); }
+});
+
+/* ---------- Export ---------- */
+function download(name, text, type){
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(text instanceof Blob ? text : new Blob([text],{type})); a.download = name;
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href), 1000);
+}
+const baseName = () => (state.name || "route").replace(/[^\w\-]+/g,"_").slice(0,60);
+const xml = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const gpxWrap = body => `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="Langs de route" xmlns="http://www.topografix.com/GPX/1/1">\n${body}\n</gpx>\n`;
+const ptXml = p => `<trkpt lat="${p[0].toFixed(6)}" lon="${p[1].toFixed(6)}">${p[2]!=null ? `<ele>${p[2].toFixed(1)}</ele>` : ""}</trkpt>`;
+function stayDesc(r){
+  const t = r.tags;
+  const addr = [[t["addr:street"],t["addr:housenumber"]].filter(Boolean).join(" "), [t["addr:postcode"],t["addr:city"]].filter(Boolean).join(" ")].filter(Boolean).join(", ");
+  return [r.kind, addr, t.phone || t["contact:phone"], t.website || t["contact:website"]].filter(Boolean).join(" | ");
+}
+const wptXml = (r, prefix) => `  <wpt lat="${r.lat}" lon="${r.lon}"><name>${xml(prefix + r.name)}</name><desc>${xml(stayDesc(r))}</desc><type>${xml(r.cat.label)}</type></wpt>`;
+const stageTitle = (st,i) => `Etappe ${i+1}: km ${fmt(st.from)} – ${fmt(st.to)} (${fmt(st.to-st.from)} km)` + (st.stay ? `, tot ${st.stay.name}` : "");
+const trkXml = (st,i) => `  <trk><name>${xml(stageTitle(st,i))}</name><trkseg>\n${stagePoints(st).map(p=>"    "+ptXml(p)).join("\n")}\n  </trkseg></trk>`;
+function stageWpts(i){
+  const w = [], prev = state.stages[i-1], st = state.stages[i];
+  const M = state.stageM || STAGE_MODES.stay;
+  if (prev && prev.stay) w.push(wptXml(prev.stay, prev.fallback ? STAGE_MODES.stay.from : M.from));
+  if (st.stay) w.push(wptXml(st.stay, st.fallback ? STAGE_MODES.stay.wpt : M.wpt));
+  return w;
+}
+const stageFile = i => gpxWrap([...stageWpts(i), trkXml(state.stages[i], i)].join("\n"));
+const stageName = i => `${baseName()}_etappe${String(i+1).padStart(2,"0")}.gpx`;
+$("stagebody").addEventListener("change", e => {
+  const sel = e.target.closest("select[data-alt]"); if (!sel || !sel.value) return;
+  const i = +sel.dataset.alt, P = state.pool;
+  const chosen = [...P.primary, ...P.fallback].find(r => r.key === sel.value);
+  if (chosen){ recomputeFrom(i, chosen); stageStatus(`Etappe ${i+1} eindigt nu bij ${chosen.name}. De etappes daarna zijn opnieuw berekend.`); }
+});
+$("stagebody").addEventListener("click", e => {
+  if (e.target.closest("a, select")) return;
+  if (e.target.closest("#unexclude")){ state.excluded.clear(); recomputeFrom(0); stageStatus("Alle uitgesloten plaatsen zijn teruggezet en de etappes zijn opnieuw berekend."); return; }
+  const ex = e.target.closest("[data-ex]");
+  if (ex){ const i = +ex.dataset.ex, r = state.stages[i].stay;
+    state.excluded.add(r.key); recomputeFrom(i);
+    stageStatus(`${r.name} wordt niet meer gebruikt. Etappe ${i+1} en verder zijn opnieuw berekend.`); return; }
+  const dl = e.target.closest("[data-dl]");
+  if (dl){ const i = +dl.dataset.dl; download(stageName(i), stageFile(i), "application/gpx+xml"); return; }
+  const row = e.target.closest("tr[data-stage]");
+  if (row){ map.fitBounds(L.latLngBounds(stagePoints(state.stages[+row.dataset.stage])), {padding:[30,30]});
+    $("map").scrollIntoView({behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth"}); }
+});
+/* Keuzelijst met de start en alle eerdere (zichtbare) punten; het vorige punt staat standaard geselecteerd. */
+function segPicker(to, where){
+  const prev = visibleResults().filter(r => r.km < to.km - 0.01);
+  const opts = [`<option value="">Start van de route (km 0)</option>`].concat(prev.map((r, i) =>
+    `<option value="${r.key}"${i === prev.length-1 ? " selected" : ""}>km ${fmt(r.km)}: ${esc(r.name)} (${esc(r.kind)}), ${fmt(to.km - r.km)} km</option>`));
+  return `<span class="segpick"><select id="seg-${where}-${to.id}" aria-label="Vertrekpunt voor de GPX naar ${esc(to.name)}">${opts.join("")}</select>
+    <button class="secondary small" type="button" data-seg="${to.key}">Download</button></span>
+    <span class="segend">of <button class="linkbtn" type="button" data-segend="${to.key}">van hier tot het einde van de route</button> (${fmt(state.cum.at(-1)/1000 - to.km)} km)</span>`;
+}
+/* GPX van het gekozen punt (of de start) tot dit punt, met alle originele routepunten. */
+function routeGpx(from, to){   // from of to mag null zijn: dan start of einde van de route
+  const total = state.cum.at(-1)/1000;
+  const st = {from: from ? from.km : 0, to: to ? to.km : total,
+    startCut: from ? {i:from.seg, t:from.t} : {i:0, t:0},
+    endCut: to ? {i:to.seg, t:to.t} : {i:state.flat.length-2, t:1}};
+  const title = `${from ? from.name : "Start"} – ${to ? to.name : "Einde"} (${fmt(st.to - st.from)} km)`;
+  const body = [...(from ? [wptXml(from, "Vertrek: ")] : []), ...(to ? [wptXml(to, "Bestemming: ")] : []),
+    `  <trk><name>${xml(title)}</name><trkseg>\n${stagePoints(st).map(p => "    " + ptXml(p)).join("\n")}\n  </trkseg></trk>`].join("\n");
+  const label = (to ? to.name : "einde").replace(/[^\w\-]+/g, "_").slice(0, 40);
+  download(`${baseName()}_km${st.from.toFixed(1)}-${st.to.toFixed(1)}_${label}.gpx`, gpxWrap(body), "application/gpx+xml");
+  setStatus(`GPX gedownload: ${title}.`);
+}
+function routeGpxTo(key, fromKey){
+  const V = visibleResults(), to = V.find(r => r.key === key);
+  if (to) routeGpx(fromKey ? V.find(r => r.key === fromKey) || null : null, to);
+}
+document.addEventListener("click", e => {
+  const open = e.target.closest("[data-segopen]");
+  if (open){
+    const r = visibleResults().find(x => x.key === open.dataset.segopen); if (!r) return;
+    const cell = open.parentElement; cell.innerHTML = segPicker(r, "tab"); cell.querySelector("select").focus(); return;
+  }
+  const end = e.target.closest("[data-segend]");
+  if (end){ const r = visibleResults().find(x => x.key === end.dataset.segend); if (r) routeGpx(r, null); return; }
+  const b = e.target.closest("[data-seg]"); if (!b) return;
+  e.preventDefault();
+  routeGpxTo(b.dataset.seg, b.closest(".segpick").querySelector("select").value);
+});
+$("stageAll").onclick = () => {
+  const S = state.stages;
+  download(`${baseName()}_etappes.gpx`, gpxWrap([
+    ...S.filter(st=>st.stay).map(st => wptXml(st.stay, (st.fallback ? STAGE_MODES.stay : (state.stageM || STAGE_MODES.stay)).wpt)),
+    ...S.map((st,i) => trkXml(st,i))].join("\n")), "application/gpx+xml");
+};
+$("stageZip").onclick = async () => {
+  if (!window.JSZip){ $("stageAll").click(); return; }
+  const zip = new JSZip();
+  state.stages.forEach((_,i) => zip.file(stageName(i), stageFile(i)));
+  download(`${baseName()}_etappes.zip`, await zip.generateAsync({type:"blob"}));
+};
+$("exGpx").onclick = () => download(baseName()+"_poi.gpx",
+  `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="Langs de route" xmlns="http://www.topografix.com/GPX/1/1">\n` +
+  visibleResults().map(r => `  <wpt lat="${r.lat}" lon="${r.lon}"><name>${xml(r.name)}</name><desc>km ${r.km.toFixed(1)} – ${xml(r.kind)}</desc><type>${xml(r.cat.label)}</type></wpt>`).join("\n") +
+  `\n</gpx>\n`, "application/gpx+xml");
+$("exGeo").onclick = () => download(baseName()+"_poi.geojson", JSON.stringify({type:"FeatureCollection",
+  features: visibleResults().map(r => ({type:"Feature", geometry:{type:"Point",coordinates:[r.lon,r.lat]},
+    properties:{...r.tags, osm_id:r.key, categorie:r.cat.label, soort:r.kind, km:+r.km.toFixed(2), afstand_m:r.dist}}))}, null, 1), "application/geo+json");
+$("exCsv").onclick = () => {
+  const q = v => `"${String(v).replace(/"/g,'""')}"`;
+  const lines = [["km","naam","soort","categorie","afstand_m","lat","lon","osm"].join(";")]
+    .concat(visibleResults().map(r => [r.km.toFixed(2).replace(".",","), q(r.name), q(r.kind), q(r.cat.label), r.dist, r.lat, r.lon,
+      `https://www.openstreetmap.org/${r.type}/${r.id}`].join(";")));
+  download(baseName()+"_poi.csv", "\ufeff"+lines.join("\r\n"), "text/csv");
+};
+
+/* ---------- Invoer ---------- */
+async function handleFile(f){
+  if (!f) return;
+  try { loadTrack(parseGPX(await f.text()), f.name.replace(/\.gpx$/i,"")); }
+  catch(e){ setStatus(e.message, true); }
+}
+$("file").addEventListener("change", e => handleFile(e.target.files[0]));
+const drop = $("drop");
+["dragenter","dragover"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("over"); }));
+["dragleave","drop"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove("over"); }));
+drop.addEventListener("drop", e => handleFile(e.dataTransfer.files[0]));
+$("demo").onclick = () => loadTrack({name:"Voorbeeld: Amsterdam Centraal – Vondelpark", segs:[[
+  [52.3791,4.9003],[52.3765,4.8966],[52.3731,4.8926],[52.3700,4.8910],[52.3676,4.8883],[52.3653,4.8836],
+  [52.3626,4.8810],[52.3605,4.8774],[52.3590,4.8720],[52.3577,4.8660],[52.3563,4.8600],[52.3548,4.8545]]]}, "Voorbeeld");
+
+$("cats").addEventListener("change", rebuildQuery);
+$("custom").addEventListener("input", rebuildQuery);
+$("buffer").addEventListener("change", rebuildQuery);
+$("precision").addEventListener("change", rebuildQuery);
+$("run").onclick = () => { state.ran = true; runQuery(); };
+$("cancel").onclick = () => state.abort?.abort();
+$("makeStages").onclick = makeStages;
+$("stageCancel").onclick = () => state.stageAbort?.abort();
+$("stageMode").addEventListener("change", switchMode);
+$("stageLen").addEventListener("input", updateStageHelp);
+$("stageTol").addEventListener("input", updateStageHelp);
+$("copy").onclick = async () => {
+  try { await navigator.clipboard.writeText($("query").value); setStatus("Query gekopieerd."); }
+  catch { $("query").select(); setStatus("Kopiëren lukte niet automatisch; de query is geselecteerd, druk op Ctrl+C."); }
+};
+$("turbo").onclick = () => {
+  const q = $("query").value;
+  const url = "https://overpass-turbo.eu/?Q=" + encodeURIComponent(q) + "&R";
+  if (url.length > 60000){ setStatus("De query is te lang voor een link. Kopieer hem en plak hem zelf in Overpass turbo.", true); return; }
+  window.open(url, "_blank", "noopener");
+};
+</script>
+</body>
+</html>
